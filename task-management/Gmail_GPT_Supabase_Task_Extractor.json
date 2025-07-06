@@ -1,0 +1,368 @@
+{
+  "name": "Gmail → GPT → Supabase | Task Extractor",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -580,
+        -430
+      ],
+      "id": "60d16e90-4a70-4aca-9643-997141a65cdf",
+      "name": "Trigger Workflow",
+      "notesInFlow": true,
+      "notes": "Runs the workflow on a schedule (every X minutes) to check for new unread emails."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return {\n  prompt: `You are an AI productivity assistant. Given the email below, extract any actionable task(s). Respond in this format:\n  {\n    \"task\": \"Brief title of the task\",\n    \"description\": \"Expanded detail if needed\",\n    \"due_date\": \"2025-07-01\" or null,\n    \"estimated_minutes\": 30,\n    \"deep_work\": true\n  }\n  If no actionable task exists, respond with null.\\n\\nEmail:\\n${$('Loop Over Items').item.json.snippet}`\n};\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        -580
+      ],
+      "id": "501a117f-93ff-43e9-8a49-5f0c58c4e496",
+      "name": "Prepare ChatGPT Prompt",
+      "executeOnce": false,
+      "alwaysOutputData": true,
+      "notesInFlow": true,
+      "notes": "Formats the email content into a prompt for GPT, asking it to extract a structured task in JSON format."
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "chatgpt-4o-latest",
+          "mode": "list",
+          "cachedResultName": "CHATGPT-4O-LATEST"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "={{ $json.prompt }}"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        740,
+        -580
+      ],
+      "id": "cec2c062-7333-499a-b5c3-5f7831022d34",
+      "name": "Extract Task Detail from Email",
+      "notesInFlow": true,
+      "notes": "Sends the email to ChatGPT-4o to extract task details like title, description, due date, duration, and focus level."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.Supabase_TaskManagement_URI + '/rest/v1/emails?on_conflict=email_id' }}",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={\n  \"apikey\": \"{{ $vars.Supabase_TaskManagement_ANON_KEY }}\",\n  \"Authorization\": \"Bearer {{ $vars.Supabase_TaskManagement_ANON_KEY }}\",\n  \"Content-Type\": \"application/json\",\n  \"Prefer\": \"resolution=ignore-conflict\"\n}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"email_id\": {{ JSON.stringify( $('Get Unread Emails from Inbox').item.json.id) }},\n  \"subject\": {{ JSON.stringify($('Get Unread Emails from Inbox').item.json.Subject) }},\n  \"sender\": {{ JSON.stringify($('Get Unread Emails from Inbox').item.json.From) }},\n  \"received_at\": {{ JSON.stringify(new Date(Number($('Get Unread Emails from Inbox').item.json.internalDate)).toISOString()) }},\n  \"body\": {{ JSON.stringify($('Get Unread Emails from Inbox').item.json.snippet) }},\n  \"gpt_summary\": {{ JSON.stringify($json.message.content) }},\n  \"requires_deep_work\": {{ JSON.stringify($json.message.content.deep_work) }},\n  \"deleted\": false\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1116,
+        -505
+      ],
+      "id": "d708c9c3-d5ec-4b2a-8f8a-b5b123fa44ea",
+      "name": "Insert Email Detail to Supabase",
+      "alwaysOutputData": false,
+      "notesInFlow": true,
+      "notes": "Inserts the processed email and GPT-extracted task into the Supabase emails table. Uses upsert to avoid duplicates."
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "returnAll": true,
+        "filters": {
+          "labelIds": [
+            "INBOX"
+          ],
+          "readStatus": "unread"
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        -360,
+        -430
+      ],
+      "id": "5b774acc-8e19-4576-9970-91a060d25d87",
+      "name": "Get Unread Emails from Inbox",
+      "webhookId": "b6105761-5356-4ba7-828d-6efe96e244ba",
+      "alwaysOutputData": false,
+      "notesInFlow": true,
+      "notes": "Fetches all unread emails from the inbox using Gmail API. These are the raw email inputs for analysis."
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "tableId": "emails",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "email_id",
+              "keyValue": "={{ $json.id }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        80,
+        -580
+      ],
+      "id": "5d856e76-d335-4a72-8807-556417a35d2d",
+      "name": "Get Email from Database",
+      "executeOnce": false,
+      "alwaysOutputData": true,
+      "notesInFlow": true,
+      "notes": "Checks Supabase to see if this email has already been processed (by matching on email_id). Prevents duplicate GPT calls."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "5969f38d-31d4-4ed0-ad6c-d8bb522db40f",
+              "leftValue": "={{ $json.isEmpty() }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        300,
+        -580
+      ],
+      "id": "4d1d53a4-14c4-4d53-b9cb-1f29d425060b",
+      "name": "Check if Email in Database",
+      "alwaysOutputData": false,
+      "notesInFlow": true,
+      "notes": "If the email does not exist in Supabase, continue with GPT processing. Otherwise, skip this email."
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -140,
+        -430
+      ],
+      "id": "9ff6b95c-9d19-4925-a718-15ca5774d81d",
+      "name": "Loop Over Items",
+      "notesInFlow": true,
+      "notes": "Loops through each unread email individually, allowing per-item processing (dedup, GPT, insert)."
+    },
+    {
+      "parameters": {
+        "content": "## 📩 Gmail → GPT → Supabase | Task Extractor\n\nThis n8n workflow automates the extraction of actionable tasks from unread Gmail messages using OpenAI's GPT API, stores the resulting task metadata in Supabase, and avoids re-processing previously handled emails.\n\n---\n\n## ✅ What It Does\n\n1. **Triggers on a schedule** to check for unread emails in your Gmail inbox.\n2. **Loops through each email individually** using `SplitInBatches`.\n3. **Checks Supabase** to see if the email has already been processed.\n4. If it's a new email:\n   - Formats the email content into a structured GPT prompt\n   - Calls **ChatGPT-4o** to extract structured task data\n   - Inserts the result into your `emails` table in Supabase\n\n---\n\n## 🧰 Prerequisites\n\nBefore using this workflow, you must have:\n\n- An active **n8n Cloud or self-hosted instance**\n- A connected **Gmail account** with OAuth credentials in n8n\n- A **Supabase project** with an `emails` table and:\n  ```sql\n  ALTER TABLE emails ADD CONSTRAINT unique_email_id UNIQUE (email_id);\n  ```\n- An **OpenAI API key** with access to GPT-4o or GPT-3.5-turbo\n\n---\n\n## 🔐 Required Credentials\n\n| Name            | Type       | Description                       |\n|-----------------|------------|-----------------------------------|\n| Gmail OAuth     | Gmail      | To pull unread messages           |\n| OpenAI API Key  | OpenAI     | To generate task summaries        |\n| Supabase API    | HTTP       | For inserting rows via REST API   |\n\n---\n\n## 🔁 Environment Variables or Replacements\n\n- `Supabase_TaskManagement_URI` → e.g., `https://your-project.supabase.co`\n- `Supabase_TaskManagement_ANON_KEY` → Your Supabase anon key\n\nThese are used in the HTTP request to Supabase.\n\n---\n\n## ⏰ Scheduling / Trigger\n\n- Triggered using a **Schedule node**\n- Default: every X minutes (adjust to your preference)\n- Uses a Gmail API filter: **unread emails with label = INBOX**\n\n---\n\n## 🧠 Intended Use Case\n\n> Designed for productivity-minded professionals who want to extract, summarize, and store actionable tasks from incoming email — without processing the same email twice or wasting GPT API credits.\n\nThis is part of a larger system integrating GPT, calendar scheduling, and optional task platforms (like ClickUp).\n\n---\n\n## 📦 Output (Stored in Supabase)\n\nEach processed email includes:\n- `email_id`\n- `subject`\n- `sender`\n- `received_at`\n- `body` (email snippet)\n- `gpt_summary` (structured task)\n- `requires_deep_work` (from GPT logic)\n- `deleted` (initially false)",
+        "height": 1840,
+        "width": 1000
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1680,
+        -640
+      ],
+      "id": "a46fc69d-9711-4846-b6ff-e77394f518b5",
+      "name": "Sticky Note"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Trigger Workflow": {
+      "main": [
+        [
+          {
+            "node": "Get Unread Emails from Inbox",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare ChatGPT Prompt": {
+      "main": [
+        [
+          {
+            "node": "Extract Task Detail from Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Task Detail from Email": {
+      "main": [
+        [
+          {
+            "node": "Insert Email Detail to Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Unread Emails from Inbox": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Email Detail to Supabase": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Email from Database": {
+      "main": [
+        [
+          {
+            "node": "Check if Email in Database",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check if Email in Database": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare ChatGPT Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Get Email from Database",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "63255979-69cc-4fec-b718-c19286365d8e",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "05cd306a73f97150c796adf49d28dcc97084b722b0b212b8c228ea8b71d87571"
+  },
+  "id": "8mU5BDEPNPCBrcNG",
+  "tags": [
+    {
+      "name": "task-automation",
+      "id": "0VNtsf3y4vA0LFF0",
+      "createdAt": "2025-07-06T09:19:48.476Z",
+      "updatedAt": "2025-07-06T09:19:48.476Z"
+    },
+    {
+      "name": "productivity",
+      "id": "Gp5my6RiYKj2wHzJ",
+      "createdAt": "2025-07-06T09:19:43.487Z",
+      "updatedAt": "2025-07-06T09:19:43.487Z"
+    },
+    {
+      "name": "gmail",
+      "id": "HLJ0RxSghUY4J0BP",
+      "createdAt": "2025-07-06T09:19:36.250Z",
+      "updatedAt": "2025-07-06T09:19:36.250Z"
+    },
+    {
+      "name": "supabase",
+      "id": "gFhx1SjidR07WGFj",
+      "createdAt": "2025-07-06T09:19:31.524Z",
+      "updatedAt": "2025-07-06T09:19:31.524Z"
+    },
+    {
+      "name": "openai",
+      "id": "i5Mq8cUvKPQIbmp6",
+      "createdAt": "2025-07-06T09:19:24.645Z",
+      "updatedAt": "2025-07-06T09:19:24.645Z"
+    },
+    {
+      "name": "usecase-showcase",
+      "id": "kQ9zpo5czqpFac7F",
+      "createdAt": "2025-07-06T09:19:51.396Z",
+      "updatedAt": "2025-07-06T09:19:51.396Z"
+    },
+    {
+      "name": "workflow",
+      "id": "zvPD5vt16yHVA9Y2",
+      "createdAt": "2025-07-06T09:19:40.318Z",
+      "updatedAt": "2025-07-06T09:19:40.318Z"
+    }
+  ]
+}
